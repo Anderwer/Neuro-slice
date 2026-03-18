@@ -5,6 +5,7 @@ __pycache__/
 
 # Virtual environments
 .venv/
+.venv_legacy/
 venv/
 env/
 ENV/
@@ -42,6 +43,7 @@ Thumbs.db
 .env
 .env.*
 !.env.example
+my_config.toml
 
 # Outputs / generated media
 output/
@@ -49,6 +51,11 @@ cut_songs_*/
 tmp/
 temp_song_*.wav
 *.tmp.json
+
+# Local runtime state
+runtime/local_envs.json
+runtime/qt_advanced_settings.json
+runtime/webui_advanced_settings.json
 
 # Models / caches
 .cache/
