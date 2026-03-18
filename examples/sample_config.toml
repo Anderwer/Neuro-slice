@@ -1,0 +1,175 @@
+[project]
+name = "Neuro-slice"
+output_dir = "output"
+
+[input]
+video_path = "vod.mp4"
+
+[detector]
+# Detection backend:
+# - "legacy-subprocess" : use the original high-accuracy detector in a separate
+#                         legacy environment and read SEGMENTS_JSON from it
+# - "heuristic"         : use the built-in lightweight detector
+#
+# Default workflow:
+# 1. The main project runs in `.venv`
+# 2. The legacy high-accuracy detector runs in `.venv_legacy`
+# 3. The setup flow writes `runtime/local_envs.json`
+# 4. The main application automatically resolves the legacy Python interpreter
+#    and detector script from that runtime wiring file
+#
+# In other words, users are not expected to manually type detector paths after
+# the initial setup completes.
+backend = "legacy-subprocess"
+
+# Whether the setup flow should prepare the legacy detector environment
+# automatically.
+auto_setup_legacy_env = true
+
+# Location of the dedicated legacy detector environment.
+legacy_env_dir = ".venv_legacy"
+
+# Optional explicit path to the legacy detector Python interpreter.
+# Leave empty to let the application resolve it automatically from:
+# - runtime/local_envs.json
+# - detector.legacy_env_dir
+legacy_python_path = ""
+
+# Path to the legacy detector script. By default the project expects the
+# detector script to live under the runtime directory.
+legacy_script_path = "runtime/detect_segments_tf.py"
+
+# Minimum duration for a raw music region returned by the legacy detector.
+min_music_duration = 20
+
+# Merge neighboring music regions if their gap is smaller than this value.
+merge_gap_seconds = 90.0
+
+[segment]
+# Window size used by the heuristic detector. These values are still kept here
+# because they may be useful if you switch away from the legacy backend later.
+window_seconds = 2.0
+hop_seconds = 1.0
+
+# Minimum duration for a final exported song segment.
+min_song_duration = 45.0
+
+# Maximum duration for a single song segment.
+max_song_duration = 420.0
+
+# Merge neighboring heuristic segments if the gap is small enough.
+merge_gap_seconds = 10.0
+
+# Extra padding added to exported clips.
+padding_before = 7.0
+padding_after = 7.0
+
+[audio]
+sample_rate = 16000
+channels = 1
+
+# Optional ffmpeg filter chain for preprocessing analysis / ASR audio.
+preprocess_filter = "highpass=f=120,lowpass=f=5000"
+
+[asr]
+enabled = true
+provider = "faster-whisper"
+model_size = "large-v3"
+
+# Device options:
+# - "auto" : let the runtime choose
+# - "cuda" : force NVIDIA GPU
+# - "cpu"  : force CPU
+device = "auto"
+
+# Compute type examples:
+# - "float16"      : common for CUDA
+# - "int8"         : common for CPU / lower VRAM
+# - "int8_float16" : mixed mode used by some CUDA setups
+# Leave empty to use the project's automatic default.
+compute_type = ""
+
+language = ""
+beam_size = 5
+best_of = 5
+vad_filter = false
+condition_on_previous_text = false
+initial_prompt = "Lyrics of the song."
+
+[recognition]
+# Optional LLM title recognition.
+#
+# Leave this disabled if you only want segment detection and clip export.
+# Enable it when you want the app to guess song titles from the extracted lyrics.
+enabled = false
+#
+# To enable title recognition:
+# 1. set `enabled = true`
+# 2. keep `mode = "openai"` or switch to another supported provider mode later
+# 3. fill in `api_key`
+# 4. fill in `base_url` if you are using an OpenAI-compatible endpoint instead of
+#    the default official OpenAI base URL
+# 5. choose the model you want to use for title guessing
+#
+# Example:
+# enabled = true
+# mode = "openai"
+# api_key = "your_api_key_here"
+# base_url = "https://api.openai.com/v1"
+# model = "gpt-4o-mini"
+#
+# Supported modes:
+# - "none"   : disable title recognition
+# - "openai" : use an OpenAI-compatible API for song title guessing
+mode = "openai"
+
+# API key for the title recognition provider.
+api_key = ""
+
+# Optional base URL for OpenAI-compatible services.
+# Leave empty to use the provider default.
+base_url = ""
+
+# LLM used for title recognition.
+model = "gpt-4o-mini"
+
+# Request timeout for each recognition API call, in seconds.
+request_timeout_seconds = 30
+
+# Maximum number of transcript characters sent to the recognition model.
+max_lyrics_chars = 2500
+
+# The recognition client will retry up to 5 times on transient API/network failures.
+# This retry behavior is built into the app and does not require an extra config field.
+#
+# Sleep interval between retry attempts / API calls, in seconds.
+api_sleep_seconds = 1.5
+
+[export]
+export_video = true
+export_audio = false
+video_container = "mp4"
+audio_format = "mp3"
+
+# Precise mode is the default:
+# use re-encoding for more reliable boundaries and to avoid black frames
+# at the beginning of exported clips.
+video_codec = "libx264"
+audio_codec = "aac"
+
+# File naming pattern fields may include:
+# {index} {title} {date} {singer} {start} {end}
+filename_pattern = "[{singer}] {title} ({date})"
+
+[metadata]
+date = "2025-08-21"
+singer = "Evil"
+
+[review]
+# If true, export a manifest JSON for manual correction.
+write_manifest = true
+manifest_name = "songs.json"
+
+[logging]
+level = "INFO"
+rich = true

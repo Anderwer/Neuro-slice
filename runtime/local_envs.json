@@ -1,0 +1,12 @@
+﻿{
+    "detector_backend":  "legacy-subprocess",
+    "main_python_absolute":  "D:\\Github Repositories\\Neuro-slice\\.venv\\Scripts\\python.exe",
+    "legacy_python_exists":  true,
+    "legacy_detector_script":  "runtime/detect_segments_tf.py",
+    "main_python":  ".venv/Scripts/python.exe",
+    "legacy_python":  ".venv_legacy/Scripts/python.exe",
+    "legacy_script_exists":  true,
+    "repo_root":  "D:\\Github Repositories\\Neuro-slice",
+    "legacy_detector_script_absolute":  "D:\\Github Repositories\\Neuro-slice\\runtime\\detect_segments_tf.py",
+    "legacy_python_absolute":  "D:\\Github Repositories\\Neuro-slice\\.venv_legacy\\Scripts\\python.exe"
+}

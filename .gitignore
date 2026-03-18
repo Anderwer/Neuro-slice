@@ -1,0 +1,72 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+.venv_tf/
+
+# Build / packaging
+build/
+dist/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+
+# Test / coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Outputs / generated media
+output/
+cut_songs_*/
+tmp/
+temp_song_*.wav
+*.tmp.json
+
+# Models / caches
+.cache/
+models/
+hf_cache/
+whisper_cache/
+
+# Media files
+*.mp4
+*.mkv
+*.webm
+*.mov
+*.avi
+*.wav
+*.mp3
+*.flac
+*.m4a
+
+# ffmpeg / probe artifacts
+ffmpeg2pass-0.log
+ffmpeg2pass-0.log.mbtree

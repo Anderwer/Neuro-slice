@@ -1,0 +1,26 @@
+{
+  "asr": {
+    "model_size": "large-v3",
+    "device": "cuda",
+    "compute_type": ""
+  },
+  "segment": {
+    "padding_before": 7.0,
+    "padding_after": 7.0
+  },
+  "export": {
+    "export_video": true,
+    "export_audio": false
+  },
+  "metadata": {
+    "singer": "Evil",
+    "date": "2026-02-19"
+  },
+  "recognition": {
+    "enabled": true,
+    "mode": "openai",
+    "api_key": "sk-NY7PQum8nyniQL7lrcPvYKRml7JLkuJcI341TxdiiTULwVGL",
+    "base_url": "http://192.168.1.102:8317/v1",
+    "model": "gpt-5.4"
+  }
+}

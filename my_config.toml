@@ -1,0 +1,78 @@
+[project]
+name = "Neuro-slice"
+output_dir = "output"
+
+[input]
+video_path = "test_video/【直播回放】Evil卡拉OK！ 2026年02月19日03点场.mp4"
+
+[detector]
+backend = "legacy-subprocess"
+
+[segment]
+window_seconds = 2.0
+hop_seconds = 1.0
+min_song_duration = 45.0
+max_song_duration = 420.0
+merge_gap_seconds = 10.0
+padding_before = 7.0
+padding_after = 7.0
+
+[audio]
+sample_rate = 16000
+channels = 1
+preprocess_filter = "highpass=f=120,lowpass=f=5000"
+
+[asr]
+enabled = true
+provider = "faster-whisper"
+model_size = "large-v2"
+device = "cuda"
+compute_type = "float16"
+language = ""
+beam_size = 5
+best_of = 5
+vad_filter = false
+condition_on_previous_text = false
+initial_prompt = "Lyrics of the song."
+
+[recognition]
+# Optional LLM title recognition:
+# 1. Set enabled = true
+# 2. Fill api_key
+# 3. Fill base_url if you use a compatible proxy/provider
+# 4. Adjust model if needed
+#
+# Retry behavior:
+# - The title recognition request is expected to retry up to 5 times on
+#   transient network/API failures.
+# - If all retries fail, or the model still cannot identify the song
+#   confidently, the pipeline falls back to the default clip title.
+enabled = false
+mode = "openai"
+api_key = ""
+base_url = ""
+model = "gpt-4o-mini"
+request_timeout_seconds = 30
+max_lyrics_chars = 2500
+api_sleep_seconds = 1.5
+
+[export]
+export_video = true
+export_audio = false
+video_container = "mp4"
+audio_format = "mp3"
+video_codec = "libx264"
+audio_codec = "aac"
+filename_pattern = "[{singer}] {title} ({date})"
+
+[metadata]
+date = "2026-02-19"
+singer = "Evil"
+
+[review]
+write_manifest = true
+manifest_name = "songs.json"
+
+[logging]
+level = "DEBUG"
+rich = true
