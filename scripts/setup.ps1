@@ -288,34 +288,49 @@ function Ensure-WSLAvailable {
 }
 
 function Ensure-UbuntuDistro {
-    Write-Info "Checking whether Ubuntu is already available and initialized..."
-    $probe = cmd /d /c "wsl -d Ubuntu -- bash -lc ""printf ready"" 2>nul"
+    param(
+        [Parameter(Mandatory = $true)][string]$PreferredDistro
+    )
 
-    if ("$probe" -match "ready") {
-        Write-Success "Ubuntu is available and initialized."
-        return
+    $probeDistro = {
+        param([string]$DistroName)
+
+        if (-not $DistroName) {
+            return $false
+        }
+
+        $probe = cmd /d /c "wsl -d $DistroName -- bash -lc ""printf ready"" 2>nul"
+        return "$probe" -match "ready"
     }
 
-    Write-WarnText "Ubuntu is not ready yet. Attempting to install it through WSL..."
+    Write-Info "Checking whether preferred WSL distro '$PreferredDistro' is already available and initialized..."
+    if (& $probeDistro $PreferredDistro) {
+        Write-Success "WSL distro '$PreferredDistro' is available and initialized."
+        return $PreferredDistro
+    }
+
+    Write-WarnText "Preferred distro '$PreferredDistro' is not ready yet."
+    Write-WarnText "The legacy detector is intended to run on Ubuntu 22.04 for better Python/TensorFlow compatibility."
+    Write-WarnText "Attempting to install '$PreferredDistro' through WSL..."
     $process = Start-Process `
         -FilePath "wsl" `
-        -ArgumentList @("--install", "-d", "Ubuntu") `
+        -ArgumentList @("--install", "-d", $PreferredDistro) `
         -NoNewWindow `
         -Wait `
         -PassThru
 
     if ($process.ExitCode -ne 0) {
-        throw "Ubuntu installation inside WSL did not complete successfully. A reboot or first-launch distro setup may be required."
+        throw "WSL distro '$PreferredDistro' installation did not complete successfully. A reboot or first-launch distro setup may be required."
     }
 
-    Write-Success "Ubuntu installation command completed."
-    Write-Info "Checking whether Ubuntu has completed first-launch initialization..."
-    $probe = cmd /d /c "wsl -d Ubuntu -- bash -lc ""printf ready"" 2>nul"
-    if ("$probe" -notmatch "ready") {
-        throw "Ubuntu exists but is not ready for automation yet. Launch Ubuntu once (for example: `wsl -d Ubuntu`), complete any first-run user setup, then rerun setup.ps1."
+    Write-Success "WSL distro '$PreferredDistro' installation command completed."
+    Write-Info "Checking whether '$PreferredDistro' has completed first-launch initialization..."
+    if (-not (& $probeDistro $PreferredDistro)) {
+        throw "WSL distro '$PreferredDistro' exists but is not ready for automation yet. Launch it once (for example: `wsl -d $PreferredDistro`), complete any first-run user setup, then rerun setup.ps1."
     }
 
-    Write-Success "Ubuntu is initialized and ready."
+    Write-Success "WSL distro '$PreferredDistro' is initialized and ready."
+    return $PreferredDistro
 }
 
 function Ensure-WSLLegacyDetectorEnvironment {
@@ -342,9 +357,10 @@ function Ensure-WSLLegacyDetectorEnvironment {
     }
 
     Ensure-WSLAvailable
-    Ensure-UbuntuDistro
 
-    $wslDistro = "Ubuntu"
+    $preferredWslDistro = "Ubuntu-22.04"
+    $wslDistro = Ensure-UbuntuDistro -PreferredDistro $preferredWslDistro
+    Write-Info "Using WSL distro: $wslDistro"
     $wslCurrentUser = Get-WSLValue -Distro $wslDistro -Expression '$USER'
     $wslHome = Get-WSLValue -Distro $wslDistro -Expression '$HOME'
 
@@ -361,14 +377,25 @@ function Ensure-WSLLegacyDetectorEnvironment {
 
     if ($WslAptMirror) {
         $normalizedAptMirror = $WslAptMirror.TrimEnd("/")
-        $aptInstallCommand = "if [ -f /etc/apt/sources.list ]; then sed -i 's|http://archive.ubuntu.com/ubuntu|$normalizedAptMirror|g; s|http://security.ubuntu.com/ubuntu|$normalizedAptMirror|g; s|http://ports.ubuntu.com/ubuntu-ports|$normalizedAptMirror|g' /etc/apt/sources.list; fi; if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then sed -i 's|http://archive.ubuntu.com/ubuntu|$normalizedAptMirror|g; s|http://security.ubuntu.com/ubuntu|$normalizedAptMirror|g; s|http://ports.ubuntu.com/ubuntu-ports|$normalizedAptMirror|g' /etc/apt/sources.list.d/ubuntu.sources; fi; apt-get update && apt-get install -y python3 python3-venv python3-pip ffmpeg"
+        $aptInstallCommand = "if [ -f /etc/apt/sources.list ]; then sed -i 's|http://archive.ubuntu.com/ubuntu|$normalizedAptMirror|g; s|http://security.ubuntu.com/ubuntu|$normalizedAptMirror|g; s|http://ports.ubuntu.com/ubuntu-ports|$normalizedAptMirror|g' /etc/apt/sources.list; fi; if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then sed -i 's|http://archive.ubuntu.com/ubuntu|$normalizedAptMirror|g; s|http://security.ubuntu.com/ubuntu|$normalizedAptMirror|g; s|http://ports.ubuntu.com/ubuntu-ports|$normalizedAptMirror|g' /etc/apt/sources.list.d/ubuntu.sources; fi; apt-get update && apt-get install -y python3.10 python3.10-venv python3-pip ffmpeg"
     }
     else {
-        $aptInstallCommand = "apt-get update && apt-get install -y python3 python3-venv python3-pip ffmpeg"
+        $aptInstallCommand = "apt-get update && apt-get install -y python3.10 python3.10-venv python3-pip ffmpeg"
     }
-    $createVenvCommand = "python3 -m venv '$wslLegacyRoot'"
+    $createVenvCommand = "python3.10 -m venv '$wslLegacyRoot'"
     $upgradeLegacyPipCommand = "'$wslLegacyPython' -m pip install --upgrade pip setuptools wheel"
-    $installLegacyDepsCommand = "'$wslLegacyPython' -m pip install inaSpeechSegmenter"
+    $legacyRequirementsPath = "$wslLegacyDetectorRoot/legacy_wsl_requirements.txt"
+    $legacyRequirementsContent = @"
+tensorflow[and-cuda]==2.15.1
+keras==2.15.0
+numpy==1.26.4
+onnxruntime-gpu==1.17.1
+inaSpeechSegmenter==0.8.0
+"@
+    $legacyRequirementsFile = Join-Path $runtimeDir "legacy_wsl_requirements.txt"
+
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($legacyRequirementsFile, $legacyRequirementsContent, $utf8NoBom)
 
     Write-Info "Ensuring Python, venv support, and ffmpeg inside WSL..."
     Invoke-WSLBash -Distro $wslDistro -AsRoot -IgnoreExitCode -Command $aptInstallCommand -WorkingDirectory $RepoRoot
@@ -379,7 +406,15 @@ function Ensure-WSLLegacyDetectorEnvironment {
     Write-Info "Upgrading WSL legacy detector packaging tools..."
     Invoke-WSLBash -Distro $wslDistro -IgnoreExitCode -Command $upgradeLegacyPipCommand -WorkingDirectory $RepoRoot
 
-    Write-Info "Installing WSL legacy detector dependencies..."
+    if (Test-Path $legacyRequirementsFile) {
+        $wslRequirementsSource = Convert-WindowsPathToWSL -Path $legacyRequirementsFile
+        $copyRequirementsCommand = "mkdir -p '$wslLegacyDetectorRoot' && cp '$wslRequirementsSource' '$legacyRequirementsPath' && sed -i 's/\r$//' '$legacyRequirementsPath'"
+        Write-Info "Copying pinned legacy WSL requirements into the WSL runtime directory..."
+        Invoke-WSLBash -Distro $wslDistro -IgnoreExitCode -Command $copyRequirementsCommand -WorkingDirectory $RepoRoot
+    }
+
+    $installLegacyDepsCommand = "'$wslLegacyPython' -m pip install -r '$legacyRequirementsPath'"
+    Write-Info "Installing pinned WSL legacy detector dependencies..."
     Invoke-WSLBash -Distro $wslDistro -IgnoreExitCode -Command $installLegacyDepsCommand -WorkingDirectory $RepoRoot
 
     if (Test-Path $legacyDetectorScript) {
@@ -450,7 +485,7 @@ function Ensure-WSLLegacyDetectorEnvironment {
     Set-Content -Path $runtimeConfig -Value $runtimePayload -Encoding UTF8
     Write-Success "Legacy detector runtime configuration written: $runtimeConfig"
     Write-Info "Main Python: $mainPython"
-    Write-Info "WSL distro: $wslDistro"
+    Write-Info "WSL distro: $wslDistro (preferred: $preferredWslDistro)"
     Write-Info "WSL user: $wslCurrentUser"
     Write-Info "WSL home: $wslHome"
     Write-Info "WSL legacy detector Python: $wslLegacyPython"

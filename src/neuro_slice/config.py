@@ -26,10 +26,11 @@ class DetectorConfig(BaseConfigModel):
     legacy_env_dir: str = ".venv_legacy"
     legacy_python_path: str = ""
     legacy_script_path: str = "runtime/detect_segments_tf.py"
-    wsl_distro: str = "Ubuntu"
+    wsl_distro: str = "Ubuntu-22.04"
     wsl_legacy_python_path: str = ""
     wsl_legacy_script_path: str = ""
     wsl_wrapper_script_path: str = ""
+    wsl_python_baseline: str = "3.10"
     auto_setup_legacy_wsl_env: bool = True
     min_music_duration: int = Field(default=20, gt=0)
     merge_gap_seconds: float = Field(default=90.0, ge=0)

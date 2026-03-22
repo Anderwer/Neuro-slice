@@ -42,7 +42,7 @@ legacy_python_path = ""
 legacy_script_path = "runtime/detect_segments_tf.py"
 
 # Optional WSL distribution name used by the preferred legacy backend.
-wsl_distro = "Ubuntu"
+wsl_distro = "Ubuntu-22.04"
 
 # Optional explicit path to the legacy detector Python interpreter inside WSL.
 # Leave empty to let the application resolve it automatically from:
