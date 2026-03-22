@@ -793,10 +793,10 @@ class ProcessingPipeline:
             "legacy_script_exists": legacy_script.exists(),
             "auto_setup_legacy_env": bool(self._get("detector.auto_setup_legacy_env", True)),
             "legacy_env_dir": str(self._get("detector.legacy_env_dir", ".venv_legacy")),
-            "wsl_distro": configured_wsl_distro or runtime_wsl_distro,
-            "legacy_wsl_python": configured_wsl_python or runtime_wsl_python,
-            "legacy_wsl_detector_script": configured_wsl_detector_script or runtime_wsl_detector_script,
-            "legacy_wsl_wrapper_script": configured_wsl_wrapper_script or runtime_wsl_wrapper_script,
+            "wsl_distro": runtime_wsl_distro or configured_wsl_distro,
+            "legacy_wsl_python": runtime_wsl_python or configured_wsl_python,
+            "legacy_wsl_detector_script": runtime_wsl_detector_script or configured_wsl_detector_script,
+            "legacy_wsl_wrapper_script": runtime_wsl_wrapper_script or configured_wsl_wrapper_script,
         }
 
     def _resolve_legacy_python_path(self) -> Path:
@@ -870,10 +870,10 @@ class ProcessingPipeline:
         configured_detector_script = str(self._get("detector.wsl_legacy_script_path", "") or "").strip()
         configured_wrapper_script = str(self._get("detector.wsl_wrapper_script_path", "") or "").strip()
 
-        wsl_distro = configured_distro or str(runtime_config.get("wsl_distro", "") or "").strip()
-        wsl_python = configured_python or str(runtime_config.get("legacy_wsl_python", "") or "").strip()
-        wsl_detector_script = configured_detector_script or str(runtime_config.get("legacy_wsl_detector_script", "") or "").strip()
-        wsl_wrapper_script = configured_wrapper_script or str(runtime_config.get("legacy_wsl_wrapper_script", "") or "").strip()
+        wsl_distro = str(runtime_config.get("wsl_distro", "") or "").strip() or configured_distro
+        wsl_python = str(runtime_config.get("legacy_wsl_python", "") or "").strip() or configured_python
+        wsl_detector_script = str(runtime_config.get("legacy_wsl_detector_script", "") or "").strip() or configured_detector_script
+        wsl_wrapper_script = str(runtime_config.get("legacy_wsl_wrapper_script", "") or "").strip() or configured_wrapper_script
 
         guidance_lines = [
             "Legacy WSL detector runtime validation failed.",
@@ -1185,6 +1185,7 @@ class ProcessingPipeline:
             "-lc",
             " ".join(
                 [
+                    "bash",
                     self._quote_wsl_arg(wsl_wrapper_script),
                     self._quote_wsl_arg(wsl_python),
                     self._quote_wsl_arg(wsl_detector_script),

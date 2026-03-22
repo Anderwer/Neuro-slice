@@ -45,12 +45,16 @@ legacy_script_path = "runtime/detect_segments_tf.py"
 wsl_distro = "Ubuntu"
 
 # Optional explicit path to the legacy detector Python interpreter inside WSL.
-# By default, use an absolute path under /root.
-wsl_legacy_python_path = "/root/.neuro-slice-legacy/bin/python"
+# Leave empty to let the application resolve it automatically from:
+# - runtime/local_envs.json
+# - the current WSL user environment prepared by the setup flow
+wsl_legacy_python_path = ""
 
 # Optional explicit path to the detector script inside WSL.
-# By default, use an absolute path under /root.
-wsl_legacy_script_path = "/root/neuro-slice-runtime/detect_segments_tf.py"
+# Leave empty to let the application resolve it automatically from:
+# - runtime/local_envs.json
+# - the current WSL user environment prepared by the setup flow
+wsl_legacy_script_path = ""
 
 # Minimum duration for a raw music region returned by the legacy detector.
 min_music_duration = 20

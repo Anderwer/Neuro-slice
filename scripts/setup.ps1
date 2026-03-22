@@ -4,7 +4,11 @@ param(
     [switch]$SkipDev,
     [switch]$SkipGpu,
     [switch]$SkipLegacy,
-    [switch]$NoPause
+    [switch]$NoPause,
+    [string]$WslHttpProxy = "",
+    [string]$WslHttpsProxy = "",
+    [string]$WslPipIndexUrl = "https://pypi.tuna.tsinghua.edu.cn/simple",
+    [string]$WslAptMirror = "https://mirrors.tuna.tsinghua.edu.cn/ubuntu"
 )
 
 $ErrorActionPreference = "Stop"
@@ -33,6 +37,28 @@ function Write-WarnText {
 function Test-CommandExists {
     param([Parameter(Mandatory = $true)][string]$Name)
     return [bool](Get-Command $Name -ErrorAction SilentlyContinue)
+}
+
+function Get-WSLCommandPrefix {
+    $parts = @()
+
+    if ($WslHttpProxy) {
+        $parts += "export http_proxy='$WslHttpProxy'"
+    }
+
+    if ($WslHttpsProxy) {
+        $parts += "export https_proxy='$WslHttpsProxy'"
+    }
+
+    if ($WslPipIndexUrl) {
+        $parts += "export PIP_INDEX_URL='$WslPipIndexUrl'"
+    }
+
+    if ($parts.Count -eq 0) {
+        return ""
+    }
+
+    return ($parts -join "; ") + "; "
 }
 
 function Invoke-Checked {
@@ -65,18 +91,20 @@ function Invoke-WSLBash {
         [string]$WorkingDirectory = $PSScriptRoot
     )
 
+    $prefixedCommand = "$(Get-WSLCommandPrefix)$Command"
+
     $display = "wsl -d $Distro "
     if ($AsRoot) {
         $display += "-u root "
     }
-    $display += "-- bash -lc $Command"
+    $display += "-- bash -lc $prefixedCommand"
     Write-Info $display
 
     $cmdLine = "wsl -d $Distro "
     if ($AsRoot) {
         $cmdLine += "-u root "
     }
-    $escapedCommand = $Command.Replace('"', '\"')
+    $escapedCommand = $prefixedCommand.Replace('"', '\"')
     $cmdLine += "-- bash -lc `"$escapedCommand`""
 
     Push-Location $WorkingDirectory
@@ -109,6 +137,25 @@ function Convert-WindowsPathToWSL {
     $drive = $full.Substring(0, 1).ToLower()
     $rest = $full.Substring(2).Replace("\", "/")
     return "/mnt/$drive$rest"
+}
+
+function Get-WSLValue {
+    param(
+        [Parameter(Mandatory = $true)][string]$Distro,
+        [Parameter(Mandatory = $true)][string]$Expression
+    )
+
+    $raw = cmd /d /c "wsl -d $Distro -- bash -lc ""printf '%s' $Expression"" 2>nul"
+    if ($null -eq $raw) {
+        return ""
+    }
+
+    $text = "$raw"
+    if (-not $text) {
+        return ""
+    }
+
+    return ($text | Select-Object -First 1).ToString().Trim()
 }
 
 function Install-Uv {
@@ -298,14 +345,27 @@ function Ensure-WSLLegacyDetectorEnvironment {
     Ensure-UbuntuDistro
 
     $wslDistro = "Ubuntu"
-    $wslLegacyRoot = "/root/.neuro-slice-legacy"
+    $wslCurrentUser = Get-WSLValue -Distro $wslDistro -Expression '$USER'
+    $wslHome = Get-WSLValue -Distro $wslDistro -Expression '$HOME'
+
+    if (-not $wslCurrentUser -or -not $wslHome) {
+        throw "Failed to resolve the current WSL user and home directory. Launch Ubuntu once and make sure it initializes successfully, then rerun setup.ps1."
+    }
+
+    $wslLegacyRoot = "$wslHome/.neuro-slice-legacy"
     $wslLegacyPython = "$wslLegacyRoot/bin/python"
-    $wslLegacyDetectorRoot = "/root/neuro-slice-runtime"
+    $wslLegacyDetectorRoot = "$wslHome/neuro-slice-runtime"
     $wslLegacyDetectorScript = "$wslLegacyDetectorRoot/detect_segments_tf.py"
     $legacyWrapperScript = Join-Path $runtimeDir "detect_segments_wsl.sh"
     $wslLegacyWrapperScript = "$wslLegacyDetectorRoot/detect_segments_wsl.sh"
 
-    $aptInstallCommand = "apt-get update && apt-get install -y python3 python3-venv python3-pip ffmpeg"
+    if ($WslAptMirror) {
+        $normalizedAptMirror = $WslAptMirror.TrimEnd("/")
+        $aptInstallCommand = "if [ -f /etc/apt/sources.list ]; then sed -i 's|http://archive.ubuntu.com/ubuntu|$normalizedAptMirror|g; s|http://security.ubuntu.com/ubuntu|$normalizedAptMirror|g; s|http://ports.ubuntu.com/ubuntu-ports|$normalizedAptMirror|g' /etc/apt/sources.list; fi; if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then sed -i 's|http://archive.ubuntu.com/ubuntu|$normalizedAptMirror|g; s|http://security.ubuntu.com/ubuntu|$normalizedAptMirror|g; s|http://ports.ubuntu.com/ubuntu-ports|$normalizedAptMirror|g' /etc/apt/sources.list.d/ubuntu.sources; fi; apt-get update && apt-get install -y python3 python3-venv python3-pip ffmpeg"
+    }
+    else {
+        $aptInstallCommand = "apt-get update && apt-get install -y python3 python3-venv python3-pip ffmpeg"
+    }
     $createVenvCommand = "python3 -m venv '$wslLegacyRoot'"
     $upgradeLegacyPipCommand = "'$wslLegacyPython' -m pip install --upgrade pip setuptools wheel"
     $installLegacyDepsCommand = "'$wslLegacyPython' -m pip install inaSpeechSegmenter"
@@ -343,10 +403,27 @@ function Ensure-WSLLegacyDetectorEnvironment {
     }
 
     Write-Info "Validating the resulting WSL legacy detector runtime..."
-    $validationProbe = cmd /d /c "wsl -d Ubuntu -- bash -lc ""test -x '$wslLegacyPython' && test -f '$wslLegacyDetectorScript' && test -x '$wslLegacyWrapperScript' && printf ready"" 2>nul"
-    if ("$validationProbe" -notmatch "ready") {
-        throw "WSL legacy detector runtime validation failed. The WSL environment did not expose the expected python, detector script, and wrapper script after setup."
+    $pythonProbe = cmd /d /c "wsl -d $wslDistro -- bash -lc ""test -x '$wslLegacyPython' && printf ready"" 2>nul"
+    $detectorProbe = cmd /d /c "wsl -d $wslDistro -- bash -lc ""test -f '$wslLegacyDetectorScript' && printf ready"" 2>nul"
+    $wrapperProbe = cmd /d /c "wsl -d $wslDistro -- bash -lc ""test -f '$wslLegacyWrapperScript' && printf ready"" 2>nul"
+
+    $pythonReady = "$pythonProbe" -match "ready"
+    $detectorReady = "$detectorProbe" -match "ready"
+    $wrapperReady = "$wrapperProbe" -match "ready"
+
+    if (-not $pythonReady) {
+        throw "WSL legacy detector python was not found after setup: $wslLegacyPython"
     }
+
+    if (-not $detectorReady) {
+        throw "WSL legacy detector script was not found after setup: $wslLegacyDetectorScript"
+    }
+
+    if (-not $wrapperReady) {
+        throw "WSL legacy detector wrapper script was not found after setup: $wslLegacyWrapperScript"
+    }
+
+    Write-Success "WSL legacy detector runtime validation succeeded."
 
     $runtimePayload = @{
         repo_root = $RepoRoot
@@ -354,6 +431,8 @@ function Ensure-WSLLegacyDetectorEnvironment {
         main_python_absolute = $mainPython
         detector_backend = "legacy-wsl"
         wsl_distro = $wslDistro
+        wsl_user = $wslCurrentUser
+        wsl_home = $wslHome
         legacy_wsl_python = $wslLegacyPython
         legacy_wsl_detector_script = $wslLegacyDetectorScript
         legacy_wsl_wrapper_script = $wslLegacyWrapperScript
@@ -372,6 +451,8 @@ function Ensure-WSLLegacyDetectorEnvironment {
     Write-Success "Legacy detector runtime configuration written: $runtimeConfig"
     Write-Info "Main Python: $mainPython"
     Write-Info "WSL distro: $wslDistro"
+    Write-Info "WSL user: $wslCurrentUser"
+    Write-Info "WSL home: $wslHome"
     Write-Info "WSL legacy detector Python: $wslLegacyPython"
     Write-Info "WSL legacy detector script: $wslLegacyDetectorScript"
     Write-Info "WSL legacy detector wrapper script: $wslLegacyWrapperScript"
@@ -460,6 +541,14 @@ function Show-NextSteps {
     Write-Host "  - Some machines may still require administrator privileges, a reboot, or one manual first launch of Ubuntu."
     Write-Host "  - If setup reports that Ubuntu is not initialized yet, run: wsl -d Ubuntu"
     Write-Host "  - Complete the first-run Linux user setup, then rerun setup.ps1."
+    Write-Host "  - Domestic mirror defaults are enabled for WSL by default:"
+    Write-Host "      - WSL pip index: https://pypi.tuna.tsinghua.edu.cn/simple"
+    Write-Host "      - WSL apt mirror: https://mirrors.tuna.tsinghua.edu.cn/ubuntu"
+    Write-Host "  - You can still override them if needed:"
+    Write-Host "      -WslHttpProxy  http://127.0.0.1:7890"
+    Write-Host "      -WslHttpsProxy http://127.0.0.1:7890"
+    Write-Host "      -WslPipIndexUrl https://pypi.org/simple"
+    Write-Host "      -WslAptMirror https://mirrors.tuna.tsinghua.edu.cn/ubuntu/"
     Write-Host "  - Re-run this script with -SkipAudio, -SkipDev, -SkipGpu, or -SkipLegacy if you want a lighter install."
     Write-Host ""
 }

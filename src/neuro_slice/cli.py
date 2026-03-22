@@ -357,22 +357,56 @@ def doctor(
     table.add_column("Status")
     table.add_column("Details")
 
-    backend_ok = cfg.detector.backend in {"legacy-subprocess", "legacy-wsl"}
+    active_backend = cfg.detector.backend
+    backend_ok = active_backend in {"legacy-subprocess", "legacy-wsl"}
+    using_wsl = active_backend == "legacy-wsl"
+    using_windows_legacy = active_backend == "legacy-subprocess"
+
     wsl_runtime_ok = bool(wsl_distro and wsl_python_path and wsl_script_path)
+    windows_legacy_ok = bool(legacy_env_dir.exists() and legacy_python_path.exists() and legacy_script_path.exists())
 
     checks = [
-        ("detector.backend", "OK" if backend_ok else "WARN", cfg.detector.backend),
+        ("detector.backend", "OK" if backend_ok else "WARN", active_backend),
         ("runtime/local_envs.json", "OK" if runtime_config_path.exists() else "MISSING", str(runtime_config_path)),
-        (".venv_legacy", "OK" if legacy_env_dir.exists() else "MISSING", str(legacy_env_dir)),
-        ("legacy python", "OK" if legacy_python_path.exists() else "MISSING", str(legacy_python_path)),
-        ("legacy detector script", "OK" if legacy_script_path.exists() else "MISSING", str(legacy_script_path)),
-        ("wsl distro", "OK" if wsl_distro else "WARN", wsl_distro or "missing"),
-        ("wsl legacy python", "OK" if wsl_python_path else "WARN", wsl_python_path or "missing"),
-        ("wsl legacy detector script", "OK" if wsl_script_path else "WARN", wsl_script_path or "missing"),
+        (
+            "active detector runtime",
+            "OK" if (wsl_runtime_ok if using_wsl else windows_legacy_ok if using_windows_legacy else False) else "WARN",
+            "WSL legacy runtime" if using_wsl else "Windows legacy subprocess runtime" if using_windows_legacy else "unknown backend",
+        ),
+        (
+            ".venv_legacy",
+            "OK" if legacy_env_dir.exists() else "WARN" if using_wsl else "MISSING",
+            str(legacy_env_dir) if legacy_env_dir.exists() else f"{legacy_env_dir} (WSL mode下仅作 Windows fallback，可选)",
+        ),
+        (
+            "legacy python",
+            "OK" if legacy_python_path.exists() else "WARN" if using_wsl else "MISSING",
+            str(legacy_python_path) if legacy_python_path.exists() else f"{legacy_python_path} (WSL mode下仅作 Windows fallback，可选)",
+        ),
+        (
+            "legacy detector script",
+            "OK" if legacy_script_path.exists() else "MISSING",
+            str(legacy_script_path),
+        ),
+        (
+            "wsl distro",
+            "OK" if wsl_distro else "MISSING" if using_wsl else "WARN",
+            wsl_distro or ("missing" if using_wsl else "not used by the active backend"),
+        ),
+        (
+            "wsl legacy python",
+            "OK" if wsl_python_path else "MISSING" if using_wsl else "WARN",
+            wsl_python_path or ("missing" if using_wsl else "not used by the active backend"),
+        ),
+        (
+            "wsl legacy detector script",
+            "OK" if wsl_script_path else "MISSING" if using_wsl else "WARN",
+            wsl_script_path or ("missing" if using_wsl else "not used by the active backend"),
+        ),
         (
             "wsl runtime payload",
-            "OK" if wsl_runtime_ok else "WARN",
-            "loaded" if wsl_runtime_ok else "missing or incomplete",
+            "OK" if wsl_runtime_ok else "MISSING" if using_wsl else "WARN",
+            "loaded" if wsl_runtime_ok else "missing or incomplete" if using_wsl else "not used by the active backend",
         ),
         (
             "runtime config payload",
@@ -392,7 +426,7 @@ def doctor(
     console.print(table)
     console.print_json(
         data={
-            "detector_backend": cfg.detector.backend,
+            "detector_backend": active_backend,
             "runtime_config_path": str(runtime_config_path),
             "runtime_config_exists": runtime_config_path.exists(),
             "runtime_config": runtime_config,

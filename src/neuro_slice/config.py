@@ -27,9 +27,9 @@ class DetectorConfig(BaseConfigModel):
     legacy_python_path: str = ""
     legacy_script_path: str = "runtime/detect_segments_tf.py"
     wsl_distro: str = "Ubuntu"
-    wsl_legacy_python_path: str = "/root/.neuro-slice-legacy/bin/python"
-    wsl_legacy_script_path: str = "/root/neuro-slice-runtime/detect_segments_tf.py"
-    wsl_wrapper_script_path: str = "/root/neuro-slice-runtime/detect_segments_wsl.sh"
+    wsl_legacy_python_path: str = ""
+    wsl_legacy_script_path: str = ""
+    wsl_wrapper_script_path: str = ""
     auto_setup_legacy_wsl_env: bool = True
     min_music_duration: int = Field(default=20, gt=0)
     merge_gap_seconds: float = Field(default=90.0, ge=0)
