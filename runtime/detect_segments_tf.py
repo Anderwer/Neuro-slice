@@ -58,23 +58,59 @@ def run(cmd: list[str]) -> None:
     )
 
 
+def probe_duration(video_file: str | Path) -> float:
+    result = subprocess.run(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+            str(video_file),
+        ],
+        check=True,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    return float((result.stdout or "").strip())
+
+
 def extract_analysis_audio(
     video_file: str | Path,
     *,
     sample_rate: int = 16000,
     channels: int = 1,
+    start: float | None = None,
+    end: float | None = None,
+    status_message: str = "正在提取 legacy detector 分析音频",
 ) -> Path:
     tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
     tmp_wav = Path(tmp.name)
     tmp.close()
 
-    _emit_status("正在提取 legacy detector 分析音频")
-    run(
+    command = [
+        "ffmpeg",
+        "-y",
+    ]
+
+    if start is not None:
+        command.extend(["-ss", f"{start:.3f}"])
+
+    command.extend(
         [
-            "ffmpeg",
-            "-y",
             "-i",
             str(video_file),
+        ]
+    )
+
+    if end is not None:
+        command.extend(["-to", f"{end:.3f}"])
+
+    command.extend(
+        [
             "-vn",
             "-ac",
             str(channels),
@@ -83,6 +119,9 @@ def extract_analysis_audio(
             str(tmp_wav),
         ]
     )
+
+    _emit_status(status_message)
+    run(command)
     return tmp_wav
 
 
@@ -142,7 +181,10 @@ def detect_music_segments(
 
 def main() -> int:
     if len(sys.argv) < 2:
-        print("Usage: python detect_segments_tf.py <video_path> [min_music_duration]", file=sys.stderr)
+        print(
+            "Usage: python detect_segments_tf.py <video_path> [min_music_duration]",
+            file=sys.stderr,
+        )
         return 1
 
     video = sys.argv[1]

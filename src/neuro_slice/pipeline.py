@@ -284,10 +284,19 @@ class ProcessingPipeline:
     # ---------------------------------------------------------------------
 
     def _log(self, message: str) -> None:
+        text = str(message)
+
+        if os.name == "nt":
+            encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
+            try:
+                text = text.encode(encoding, errors="replace").decode(encoding, errors="replace")
+            except Exception:
+                text = text.encode("utf-8", errors="replace").decode("utf-8", errors="replace")
+
         if self.console is not None and hasattr(self.console, "print"):
-            self.console.print(message)
+            self.console.print(text)
         else:
-            print(message)
+            print(text)
 
     def _update_status(self, message: str) -> None:
         callback = self.status_callback
@@ -495,10 +504,18 @@ class ProcessingPipeline:
         detector_backend = str(
             os.environ.get(
                 "NEURO_SLICE_DETECTOR_BACKEND",
-                self._get("detector.backend", "legacy-subprocess"),
+                self._runtime_detector_backend(),
             )
             or "legacy-subprocess"
         ).strip().lower()
+
+        if detector_backend in {"legacy-wsl", "wsl", "legacy-wsl-default"}:
+            self._log("Using legacy detector backend: WSL subprocess")
+            return self._detect_song_candidates_with_legacy_wsl(
+                input_video=input_video,
+                total_duration=total_duration,
+                suppress_errors=False,
+            )
 
         if detector_backend in {"legacy-subprocess", "legacy", "legacy-subprocess-default"}:
             self._log("Using legacy detector backend: subprocess")
@@ -509,7 +526,16 @@ class ProcessingPipeline:
             )
 
         if detector_backend == "auto":
-            self._log("Using auto detector backend: trying legacy subprocess detector first")
+            self._log("Using auto detector backend: trying legacy WSL detector first")
+            legacy_wsl_segments = self._detect_song_candidates_with_legacy_wsl(
+                input_video=input_video,
+                total_duration=total_duration,
+                suppress_errors=True,
+            )
+            if legacy_wsl_segments:
+                return legacy_wsl_segments
+
+            self._log("Legacy WSL detector unavailable. Trying native legacy subprocess detector.")
             legacy_segments = self._detect_song_candidates_with_legacy_subprocess(
                 input_video=input_video,
                 total_duration=total_duration,
@@ -732,15 +758,32 @@ class ProcessingPipeline:
             self._log(f"Failed to read runtime config '{path}': {exc}")
             return {}
 
+    def _runtime_detector_backend(self) -> str:
+        runtime_config = self._load_runtime_local_envs()
+        configured_backend = str(self._get("detector.backend", "legacy-subprocess") or "").strip().lower()
+        runtime_backend = str(runtime_config.get("detector_backend", "") or "").strip().lower()
+        return runtime_backend or configured_backend or "legacy-subprocess"
+
     def inspect_legacy_runtime(self) -> dict[str, Any]:
         runtime_config_path = self._runtime_config_path()
         runtime_config = self._load_runtime_local_envs()
 
+        backend = self._runtime_detector_backend()
         legacy_python = self._resolve_legacy_python_path()
         legacy_script = self._resolve_legacy_script_path()
 
+        configured_wsl_distro = str(self._get("detector.wsl_distro", "") or "").strip()
+        configured_wsl_python = str(self._get("detector.wsl_legacy_python_path", "") or "").strip()
+        configured_wsl_detector_script = str(self._get("detector.wsl_legacy_script_path", "") or "").strip()
+        configured_wsl_wrapper_script = str(self._get("detector.wsl_wrapper_script_path", "") or "").strip()
+
+        runtime_wsl_distro = str(runtime_config.get("wsl_distro", "") or "").strip()
+        runtime_wsl_python = str(runtime_config.get("legacy_wsl_python", "") or "").strip()
+        runtime_wsl_detector_script = str(runtime_config.get("legacy_wsl_detector_script", "") or "").strip()
+        runtime_wsl_wrapper_script = str(runtime_config.get("legacy_wsl_wrapper_script", "") or "").strip()
+
         return {
-            "backend": str(self._get("detector.backend", "legacy-subprocess")),
+            "backend": backend,
             "runtime_config_path": str(runtime_config_path),
             "runtime_config_exists": runtime_config_path.exists(),
             "runtime_config": runtime_config,
@@ -750,6 +793,10 @@ class ProcessingPipeline:
             "legacy_script_exists": legacy_script.exists(),
             "auto_setup_legacy_env": bool(self._get("detector.auto_setup_legacy_env", True)),
             "legacy_env_dir": str(self._get("detector.legacy_env_dir", ".venv_legacy")),
+            "wsl_distro": configured_wsl_distro or runtime_wsl_distro,
+            "legacy_wsl_python": configured_wsl_python or runtime_wsl_python,
+            "legacy_wsl_detector_script": configured_wsl_detector_script or runtime_wsl_detector_script,
+            "legacy_wsl_wrapper_script": configured_wsl_wrapper_script or runtime_wsl_wrapper_script,
         }
 
     def _resolve_legacy_python_path(self) -> Path:
@@ -814,6 +861,104 @@ class ProcessingPipeline:
 
         return legacy_python, legacy_script
 
+    def _validate_legacy_wsl_runtime(self) -> tuple[str, str, str, str]:
+        runtime_config_path = self._runtime_config_path()
+        runtime_config = self._load_runtime_local_envs()
+
+        configured_distro = str(self._get("detector.wsl_distro", "") or "").strip()
+        configured_python = str(self._get("detector.wsl_legacy_python_path", "") or "").strip()
+        configured_detector_script = str(self._get("detector.wsl_legacy_script_path", "") or "").strip()
+        configured_wrapper_script = str(self._get("detector.wsl_wrapper_script_path", "") or "").strip()
+
+        wsl_distro = configured_distro or str(runtime_config.get("wsl_distro", "") or "").strip()
+        wsl_python = configured_python or str(runtime_config.get("legacy_wsl_python", "") or "").strip()
+        wsl_detector_script = configured_detector_script or str(runtime_config.get("legacy_wsl_detector_script", "") or "").strip()
+        wsl_wrapper_script = configured_wrapper_script or str(runtime_config.get("legacy_wsl_wrapper_script", "") or "").strip()
+
+        guidance_lines = [
+            "Legacy WSL detector runtime validation failed.",
+            f"runtime config: {runtime_config_path}",
+            f"wsl distro: {wsl_distro or '(missing)'}",
+            f"legacy wsl python: {wsl_python or '(missing)'}",
+            f"legacy wsl detector script: {wsl_detector_script or '(missing)'}",
+            f"legacy wsl wrapper script: {wsl_wrapper_script or '(missing)'}",
+        ]
+
+        if not runtime_config and not (configured_distro or configured_python or configured_detector_script or configured_wrapper_script):
+            guidance_lines.append(
+                "runtime/local_envs.json is missing or empty. Run the setup script again so the project can wire the main environment to the WSL legacy detector automatically."
+            )
+
+        if not wsl_distro:
+            guidance_lines.append(
+                "No WSL distro is configured. The runtime config or detector config must define `wsl_distro`."
+            )
+
+        if not wsl_python:
+            guidance_lines.append(
+                "No WSL Python path is configured. The runtime config or detector config must define `legacy_wsl_python` / `wsl_legacy_python_path`."
+            )
+
+        if not wsl_detector_script:
+            guidance_lines.append(
+                "No WSL detector script path is configured. The runtime config or detector config must define `legacy_wsl_detector_script` / `wsl_legacy_script_path`."
+            )
+
+        if not wsl_wrapper_script:
+            guidance_lines.append(
+                "No WSL wrapper script path is configured. The runtime config or detector config must define `legacy_wsl_wrapper_script` / `wsl_wrapper_script_path`."
+            )
+
+        if not shutil.which("wsl"):
+            guidance_lines.append(
+                "The `wsl` command is not available on PATH. Enable or install WSL first."
+            )
+
+        if any(
+            line.startswith(prefix)
+            for line in guidance_lines
+            for prefix in (
+                "runtime/local_envs.json is missing or empty.",
+                "No WSL distro is configured.",
+                "No WSL Python path is configured.",
+                "No WSL detector script path is configured.",
+                "No WSL wrapper script path is configured.",
+                "The `wsl` command is not available on PATH.",
+            )
+        ):
+            raise PipelineError("\n".join(guidance_lines))
+
+        return wsl_distro, wsl_python, wsl_detector_script, wsl_wrapper_script
+
+    def _windows_path_to_wsl(self, path: Path) -> str:
+        resolved = path.resolve()
+        drive = resolved.drive.rstrip(":").lower()
+        tail = resolved.as_posix().split(":", 1)[-1].lstrip("/")
+        return f"/mnt/{drive}/{tail}"
+
+    def _resolve_wsl_legacy_root(self, wsl_python: str) -> str:
+        python_path = (wsl_python or "").strip()
+        if not python_path:
+            return "/root/.neuro-slice-legacy"
+
+        normalized = python_path.replace("\\", "/")
+        if normalized.startswith("~/"):
+            normalized = "/root/" + normalized[2:]
+        elif normalized == "~":
+            normalized = "/root"
+
+        if normalized.endswith("/bin/python"):
+            return normalized[:-11]
+        if normalized.endswith("/bin/python3"):
+            return normalized[:-12]
+
+        if normalized.startswith("~/"):
+            return "/root/" + normalized[2:]
+        return normalized or "/root/.neuro-slice-legacy"
+
+    def _quote_wsl_arg(self, value: str) -> str:
+        return "'" + value.replace("'", "'\"'\"'") + "'"
+
     def _detect_song_candidates_with_legacy_subprocess(
         self,
         *,
@@ -822,6 +967,8 @@ class ProcessingPipeline:
         suppress_errors: bool = False,
     ) -> list[SongSegment]:
         min_music_duration = int(self._get("detector.min_music_duration", 20))
+        legacy_chunk_seconds = int(self._get("detector.chunk_seconds", 300))
+        legacy_chunk_overlap_seconds = int(self._get("detector.chunk_overlap_seconds", 10))
         max_song_duration = float(self._get("segment.max_song_duration", 420.0))
         padding_before = float(self._get("segment.padding_before", 1.5))
         padding_after = float(self._get("segment.padding_after", 2.0))
@@ -837,7 +984,15 @@ class ProcessingPipeline:
         self._log(f"Launching legacy detector subprocess: {legacy_python} {legacy_script}")
         self._update_status("正在启动 legacy detector 子进程")
 
-        command = [str(legacy_python), "-u", str(legacy_script), str(input_video), str(min_music_duration)]
+        command = [
+            str(legacy_python),
+            "-u",
+            str(legacy_script),
+            str(input_video),
+            str(min_music_duration),
+            str(legacy_chunk_seconds),
+            str(legacy_chunk_overlap_seconds),
+        ]
         env = os.environ.copy()
         env["PYTHONIOENCODING"] = "utf-8"
         env["PYTHONUTF8"] = "1"
@@ -988,6 +1143,198 @@ class ProcessingPipeline:
 
         if segments:
             self._log(f"Legacy detector subprocess found {len(segments)} candidate segment(s).")
+
+        return segments
+
+    def _detect_song_candidates_with_legacy_wsl(
+        self,
+        *,
+        input_video: Path,
+        total_duration: float,
+        suppress_errors: bool = False,
+    ) -> list[SongSegment]:
+        min_music_duration = int(self._get("detector.min_music_duration", 20))
+        max_song_duration = float(self._get("segment.max_song_duration", 420.0))
+        padding_before = float(self._get("segment.padding_before", 1.5))
+        padding_after = float(self._get("segment.padding_after", 2.0))
+
+        try:
+            wsl_distro, wsl_python, wsl_detector_script, wsl_wrapper_script = self._validate_legacy_wsl_runtime()
+        except PipelineError as exc:
+            if suppress_errors:
+                self._log(str(exc))
+                return []
+            raise
+
+        input_video_wsl = self._windows_path_to_wsl(input_video)
+        self._log(
+            "Launching legacy WSL detector subprocess: "
+            f"distro={wsl_distro}\n"
+            f"python={wsl_python}\n"
+            f"detector={wsl_detector_script}\n"
+            f"wrapper={wsl_wrapper_script}"
+        )
+        self._update_status("正在启动 WSL legacy detector 子进程")
+
+        command = [
+            "wsl",
+            "-d",
+            wsl_distro,
+            "--",
+            "bash",
+            "-lc",
+            " ".join(
+                [
+                    self._quote_wsl_arg(wsl_wrapper_script),
+                    self._quote_wsl_arg(wsl_python),
+                    self._quote_wsl_arg(wsl_detector_script),
+                    self._quote_wsl_arg(input_video_wsl),
+                    str(min_music_duration),
+                ]
+            ),
+        ]
+
+        process = subprocess.Popen(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        self._active_subprocess = process
+
+        stdout_lines: list[str] = []
+        json_line: str | None = None
+        try:
+            while True:
+                if self._stop_is_requested():
+                    with contextlib.suppress(Exception):
+                        if process.poll() is None:
+                            process.terminate()
+                    with contextlib.suppress(Exception):
+                        process.wait(timeout=2.0)
+                    with contextlib.suppress(Exception):
+                        if process.poll() is None:
+                            process.kill()
+                    raise PipelineError("Processing was stopped by the user while running the legacy WSL detector subprocess.")
+
+                stdout_line = process.stdout.readline() if process.stdout is not None else ""
+                if stdout_line:
+                    line = stdout_line.rstrip("\r\n")
+                    stdout_lines.append(line)
+                    if line.startswith("LEGACY_STATUS="):
+                        status_message = line.split("=", 1)[1].strip()
+                        self._log(f"[legacy-wsl] {status_message}")
+                        self._update_status(status_message)
+                    elif line.startswith("SEGMENTS_JSON="):
+                        json_line = line.split("=", 1)[1]
+                    elif line:
+                        self._log(f"[legacy-wsl] {line}")
+
+                if process.poll() is not None:
+                    remaining_stdout = process.stdout.read() if process.stdout is not None else ""
+
+                    if remaining_stdout:
+                        for extra_line in remaining_stdout.splitlines():
+                            stdout_lines.append(extra_line)
+                            if extra_line.startswith("LEGACY_STATUS="):
+                                status_message = extra_line.split("=", 1)[1].strip()
+                                self._log(f"[legacy-wsl] {status_message}")
+                                self._update_status(status_message)
+                            elif extra_line.startswith("SEGMENTS_JSON="):
+                                json_line = extra_line.split("=", 1)[1]
+                            elif extra_line:
+                                self._log(f"[legacy-wsl] {extra_line}")
+                    break
+        finally:
+            if getattr(self, "_active_subprocess", None) is process:
+                self._active_subprocess = None
+
+        completed = subprocess.CompletedProcess(
+            args=command,
+            returncode=process.returncode or 0,
+            stdout="\n".join(stdout_lines),
+            stderr="",
+        )
+
+        if completed.returncode != 0:
+            message = (
+                "Legacy WSL detector subprocess failed.\n"
+                f"distro: {wsl_distro}\n"
+                f"python: {wsl_python}\n"
+                f"detector script: {wsl_detector_script}\n"
+                f"wrapper script: {wsl_wrapper_script}\n"
+                f"exit code: {completed.returncode}\n"
+                f"stdout:\n{completed.stdout}\n"
+            )
+            if suppress_errors:
+                self._log(message)
+                return []
+            raise PipelineError(message)
+
+        if json_line is None:
+            message = (
+                "Legacy WSL detector subprocess did not return SEGMENTS_JSON.\n"
+                f"distro: {wsl_distro}\n"
+                f"python: {wsl_python}\n"
+                f"detector script: {wsl_detector_script}\n"
+                f"wrapper script: {wsl_wrapper_script}\n"
+                f"stdout:\n{completed.stdout}\n"
+            )
+            if suppress_errors:
+                self._log(message)
+                return []
+            raise PipelineError(message)
+
+        try:
+            raw_segments = json.loads(json_line)
+        except Exception as exc:
+            message = f"Failed to parse SEGMENTS_JSON from legacy WSL detector: {exc}"
+            if suppress_errors:
+                self._log(message)
+                return []
+            raise PipelineError(message) from exc
+
+        segments: list[SongSegment] = []
+        next_index = 1
+
+        for item in raw_segments:
+            if not isinstance(item, (list, tuple)) or len(item) != 2:
+                continue
+
+            start_time = float(item[0])
+            end_time = float(item[1])
+            duration = end_time - start_time
+
+            if duration <= 0:
+                continue
+
+            if duration > max_song_duration:
+                self._log(
+                    f"Skipping legacy WSL detector segment {next_index:02d}: "
+                    f"duration {duration:.1f}s exceeds max_song_duration {max_song_duration:.1f}s"
+                )
+                continue
+
+            padded_start = max(0.0, start_time - padding_before)
+            padded_end = min(total_duration, end_time + padding_after)
+            segments.append(
+                SongSegment(
+                    index=next_index,
+                    start=round(start_time, 3),
+                    end=round(end_time, 3),
+                    padded_start=round(padded_start, 3),
+                    padded_end=round(padded_end, 3),
+                    raw_duration=round(duration, 3),
+                    export_duration=round(padded_end - padded_start, 3),
+                    confidence=1.0,
+                )
+            )
+            next_index += 1
+
+        if segments:
+            self._log(f"Legacy WSL detector subprocess found {len(segments)} candidate segment(s).")
 
         return segments
 
@@ -1407,29 +1754,47 @@ class ProcessingPipeline:
             audio_codec = str(self._get("export.audio_codec", "copy"))
             video_path = output_dir / f"{base_name}.{container}"
 
-            command = [
-                "ffmpeg",
-                "-y",
-                "-i",
-                str(input_video),
-                "-ss",
-                self._format_timestamp(segment.padded_start),
-                "-to",
-                self._format_timestamp(segment.padded_end),
-            ]
+            def build_video_command(selected_video_codec: str, selected_audio_codec: str) -> list[str]:
+                command = [
+                    "ffmpeg",
+                    "-y",
+                    "-i",
+                    str(input_video),
+                    "-ss",
+                    self._format_timestamp(segment.padded_start),
+                    "-to",
+                    self._format_timestamp(segment.padded_end),
+                ]
 
-            if video_codec == "copy":
-                command.extend(["-c:v", "copy"])
-            else:
-                command.extend(["-c:v", video_codec])
+                if selected_video_codec == "copy":
+                    command.extend(["-c:v", "copy"])
+                else:
+                    command.extend(["-c:v", selected_video_codec])
 
-            if audio_codec == "copy":
-                command.extend(["-c:a", "copy"])
-            else:
-                command.extend(["-c:a", audio_codec])
+                if selected_audio_codec == "copy":
+                    command.extend(["-c:a", "copy"])
+                else:
+                    command.extend(["-c:a", selected_audio_codec])
 
-            command.append(str(video_path))
-            self._run_subprocess(command)
+                command.append(str(video_path))
+                return command
+
+            command = build_video_command(video_codec, audio_codec)
+
+            try:
+                self._run_subprocess(command)
+            except Exception as exc:
+                if video_codec != "h264_nvenc":
+                    raise
+
+                self._log(
+                    "NVIDIA video encoding is unavailable for the current export. "
+                    f"Falling back to CPU x264. Original error: {exc}"
+                )
+                fallback_audio_codec = audio_codec if audio_codec != "copy" else "aac"
+                command = build_video_command("libx264", fallback_audio_codec)
+                self._run_subprocess(command)
+
             segment.video_output = str(video_path)
 
         if self._get("export.export_audio", False):

@@ -7,26 +7,28 @@ video_path = "vod.mp4"
 
 [detector]
 # Detection backend:
+# - "legacy-wsl"        : use the original high-accuracy detector through WSL
 # - "legacy-subprocess" : use the original high-accuracy detector in a separate
-#                         legacy environment and read SEGMENTS_JSON from it
+#                         Windows legacy environment and read SEGMENTS_JSON from it
 # - "heuristic"         : use the built-in lightweight detector
 #
 # Default workflow:
 # 1. The main project runs in `.venv`
-# 2. The legacy high-accuracy detector runs in `.venv_legacy`
+# 2. The preferred legacy high-accuracy detector runs in WSL
 # 3. The setup flow writes `runtime/local_envs.json`
-# 4. The main application automatically resolves the legacy Python interpreter
-#    and detector script from that runtime wiring file
+# 4. The main application automatically resolves the legacy detector runtime
+#    from that runtime wiring file
 #
 # In other words, users are not expected to manually type detector paths after
 # the initial setup completes.
-backend = "legacy-subprocess"
+backend = "legacy-wsl"
 
 # Whether the setup flow should prepare the legacy detector environment
 # automatically.
 auto_setup_legacy_env = true
 
-# Location of the dedicated legacy detector environment.
+# Location of the dedicated Windows legacy detector environment.
+# This is kept for compatibility, but the default preferred runtime is WSL.
 legacy_env_dir = ".venv_legacy"
 
 # Optional explicit path to the legacy detector Python interpreter.
@@ -38,6 +40,17 @@ legacy_python_path = ""
 # Path to the legacy detector script. By default the project expects the
 # detector script to live under the runtime directory.
 legacy_script_path = "runtime/detect_segments_tf.py"
+
+# Optional WSL distribution name used by the preferred legacy backend.
+wsl_distro = "Ubuntu"
+
+# Optional explicit path to the legacy detector Python interpreter inside WSL.
+# By default, use an absolute path under /root.
+wsl_legacy_python_path = "/root/.neuro-slice-legacy/bin/python"
+
+# Optional explicit path to the detector script inside WSL.
+# By default, use an absolute path under /root.
+wsl_legacy_script_path = "/root/neuro-slice-runtime/detect_segments_tf.py"
 
 # Minimum duration for a raw music region returned by the legacy detector.
 min_music_duration = 20
@@ -154,7 +167,11 @@ audio_format = "mp3"
 # Precise mode is the default:
 # use re-encoding for more reliable boundaries and to avoid black frames
 # at the beginning of exported clips.
-video_codec = "libx264"
+#
+# NVIDIA accelerated precise export is used by default here:
+# - video codec: h264_nvenc
+# - audio codec: aac
+video_codec = "h264_nvenc"
 audio_codec = "aac"
 
 # File naming pattern fields may include:

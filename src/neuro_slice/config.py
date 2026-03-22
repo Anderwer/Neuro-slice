@@ -21,13 +21,21 @@ class InputConfig(BaseConfigModel):
 
 
 class DetectorConfig(BaseConfigModel):
-    backend: Literal["heuristic", "legacy-subprocess"] = "legacy-subprocess"
+    backend: Literal["heuristic", "legacy-subprocess", "legacy-wsl"] = "legacy-wsl"
     auto_setup_legacy_env: bool = True
     legacy_env_dir: str = ".venv_legacy"
     legacy_python_path: str = ""
     legacy_script_path: str = "runtime/detect_segments_tf.py"
+    wsl_distro: str = "Ubuntu"
+    wsl_legacy_python_path: str = "/root/.neuro-slice-legacy/bin/python"
+    wsl_legacy_script_path: str = "/root/neuro-slice-runtime/detect_segments_tf.py"
+    wsl_wrapper_script_path: str = "/root/neuro-slice-runtime/detect_segments_wsl.sh"
+    auto_setup_legacy_wsl_env: bool = True
     min_music_duration: int = Field(default=20, gt=0)
     merge_gap_seconds: float = Field(default=90.0, ge=0)
+    chunk_enabled: bool = False
+    chunk_seconds: float = Field(default=300.0, gt=0)
+    chunk_overlap_seconds: float = Field(default=10.0, ge=0)
 
 
 class SegmentConfig(BaseConfigModel):
@@ -83,7 +91,7 @@ class ExportConfig(BaseConfigModel):
     export_audio: bool = False
     video_container: str = "mp4"
     audio_format: str = "mp3"
-    video_codec: str = "libx264"
+    video_codec: str = "h264_nvenc"
     audio_codec: str = "aac"
     filename_pattern: str = "[{singer}] {title} ({date})"
 

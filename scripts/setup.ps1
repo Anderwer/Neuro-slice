@@ -56,12 +56,59 @@ function Invoke-Checked {
     }
 }
 
+function Invoke-WSLBash {
+    param(
+        [Parameter(Mandatory = $true)][string]$Distro,
+        [Parameter(Mandatory = $true)][string]$Command,
+        [switch]$AsRoot,
+        [switch]$IgnoreExitCode,
+        [string]$WorkingDirectory = $PSScriptRoot
+    )
+
+    $display = "wsl -d $Distro "
+    if ($AsRoot) {
+        $display += "-u root "
+    }
+    $display += "-- bash -lc $Command"
+    Write-Info $display
+
+    $cmdLine = "wsl -d $Distro "
+    if ($AsRoot) {
+        $cmdLine += "-u root "
+    }
+    $escapedCommand = $Command.Replace('"', '\"')
+    $cmdLine += "-- bash -lc `"$escapedCommand`""
+
+    Push-Location $WorkingDirectory
+    try {
+        cmd /d /c "$cmdLine 2>nul"
+
+        if (-not $IgnoreExitCode -and $LASTEXITCODE -ne 0) {
+            throw "Command failed with exit code ${LASTEXITCODE}: $display"
+        }
+    }
+    finally {
+        Pop-Location
+    }
+}
+
 function Get-RepoRoot {
     $scriptDir = Split-Path -Parent $MyInvocation.PSScriptRoot
     if (-not $scriptDir) {
         $scriptDir = Get-Location
     }
     return $scriptDir
+}
+
+function Convert-WindowsPathToWSL {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path
+    )
+
+    $full = [System.IO.Path]::GetFullPath($Path)
+    $drive = $full.Substring(0, 1).ToLower()
+    $rest = $full.Substring(2).Replace("\", "/")
+    return "/mnt/$drive$rest"
 }
 
 function Install-Uv {
@@ -157,67 +204,185 @@ function Ensure-Python {
     Write-WarnText "Please install Python 3.11+ if the next steps fail."
 }
 
-function Ensure-LegacyDetectorEnvironment {
+function Ensure-WSLAvailable {
+    if (Test-CommandExists "wsl") {
+        Write-Success "WSL command detected."
+        return
+    }
+
+    Write-WarnText "WSL was not found on PATH."
+    Write-WarnText "Attempting to install Ubuntu through WSL..."
+
+    if (-not (Test-CommandExists "winget")) {
+        throw "WSL is not available and winget is unavailable. Install WSL manually, reboot if required, then run setup.ps1 again."
+    }
+
+    $process = Start-Process `
+        -FilePath "wsl" `
+        -ArgumentList @("--install", "-d", "Ubuntu") `
+        -NoNewWindow `
+        -Wait `
+        -PassThru `
+        -ErrorAction SilentlyContinue
+
+    if ($null -eq $process) {
+        throw "Failed to launch `wsl --install -d Ubuntu`. Try running PowerShell as Administrator, then run setup.ps1 again."
+    }
+
+    if ($process.ExitCode -ne 0) {
+        throw "WSL installation did not complete successfully. Administrator privileges and/or a reboot may be required. Reboot Windows if prompted, then rerun setup.ps1."
+    }
+
+    if (-not (Test-CommandExists "wsl")) {
+        throw "WSL installation was attempted, but `wsl` is still unavailable. Reboot Windows and run setup.ps1 again."
+    }
+
+    Write-Success "WSL installation command completed."
+}
+
+function Ensure-UbuntuDistro {
+    Write-Info "Checking whether Ubuntu is already available and initialized..."
+    $probe = cmd /d /c "wsl -d Ubuntu -- bash -lc ""printf ready"" 2>nul"
+
+    if ("$probe" -match "ready") {
+        Write-Success "Ubuntu is available and initialized."
+        return
+    }
+
+    Write-WarnText "Ubuntu is not ready yet. Attempting to install it through WSL..."
+    $process = Start-Process `
+        -FilePath "wsl" `
+        -ArgumentList @("--install", "-d", "Ubuntu") `
+        -NoNewWindow `
+        -Wait `
+        -PassThru
+
+    if ($process.ExitCode -ne 0) {
+        throw "Ubuntu installation inside WSL did not complete successfully. A reboot or first-launch distro setup may be required."
+    }
+
+    Write-Success "Ubuntu installation command completed."
+    Write-Info "Checking whether Ubuntu has completed first-launch initialization..."
+    $probe = cmd /d /c "wsl -d Ubuntu -- bash -lc ""printf ready"" 2>nul"
+    if ("$probe" -notmatch "ready") {
+        throw "Ubuntu exists but is not ready for automation yet. Launch Ubuntu once (for example: `wsl -d Ubuntu`), complete any first-run user setup, then rerun setup.ps1."
+    }
+
+    Write-Success "Ubuntu is initialized and ready."
+}
+
+function Ensure-WSLLegacyDetectorEnvironment {
     param(
         [Parameter(Mandatory = $true)][string]$RepoRoot
     )
 
-    Write-Step "Provisioning legacy detector environment"
+    Write-Step "Provisioning WSL legacy detector environment"
 
     $runtimeDir = Join-Path $RepoRoot "runtime"
-    $legacyEnvPath = Join-Path $RepoRoot ".venv_legacy"
-    $legacyPython = Join-Path $legacyEnvPath "Scripts\python.exe"
-    $legacyDetectorScript = Join-Path $runtimeDir "detect_segments_tf.py"
     $runtimeConfig = Join-Path $runtimeDir "local_envs.json"
+    $mainPython = Join-Path $RepoRoot ".venv\Scripts\python.exe"
+    $legacyDetectorScript = Join-Path $runtimeDir "detect_segments_tf.py"
 
     if (-not (Test-Path $runtimeDir)) {
         New-Item -ItemType Directory -Path $runtimeDir | Out-Null
         Write-Info "Created runtime directory: $runtimeDir"
     }
 
-    if (-not (Test-Path $legacyEnvPath)) {
-        Write-Info "Creating legacy detector virtual environment..."
-        Invoke-Checked -FilePath "python" -Arguments @("-m", "venv", ".venv_legacy") -WorkingDirectory $RepoRoot
-    }
-    else {
-        Write-Info "Legacy detector virtual environment already exists."
-    }
-
-    if (-not (Test-Path $legacyPython)) {
-        throw "Legacy detector Python was not found after creating .venv_legacy: $legacyPython"
-    }
-
-    Write-Info "Upgrading legacy detector packaging tools..."
-    Invoke-Checked -FilePath $legacyPython -Arguments @("-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel") -WorkingDirectory $RepoRoot
-
-    Write-Info "Installing legacy detector dependencies..."
-    Invoke-Checked -FilePath $legacyPython -Arguments @("-m", "pip", "install", "inaSpeechSegmenter") -WorkingDirectory $RepoRoot
-
     if (-not (Test-Path $legacyDetectorScript)) {
         Write-WarnText "Legacy detector script was not found at:"
         Write-WarnText "  $legacyDetectorScript"
-        Write-WarnText "The runtime environment has been prepared, but detection will not work until detect_segments_tf.py is placed in the runtime directory."
+        Write-WarnText "The WSL detector environment can still be prepared, but detection will not work until detect_segments_tf.py exists in the runtime directory."
     }
 
-    $mainPython = Join-Path $RepoRoot ".venv\Scripts\python.exe"
+    Ensure-WSLAvailable
+    Ensure-UbuntuDistro
+
+    $wslDistro = "Ubuntu"
+    $wslLegacyRoot = "/root/.neuro-slice-legacy"
+    $wslLegacyPython = "$wslLegacyRoot/bin/python"
+    $wslLegacyDetectorRoot = "/root/neuro-slice-runtime"
+    $wslLegacyDetectorScript = "$wslLegacyDetectorRoot/detect_segments_tf.py"
+    $legacyWrapperScript = Join-Path $runtimeDir "detect_segments_wsl.sh"
+    $wslLegacyWrapperScript = "$wslLegacyDetectorRoot/detect_segments_wsl.sh"
+
+    $aptInstallCommand = "apt-get update && apt-get install -y python3 python3-venv python3-pip ffmpeg"
+    $createVenvCommand = "python3 -m venv '$wslLegacyRoot'"
+    $upgradeLegacyPipCommand = "'$wslLegacyPython' -m pip install --upgrade pip setuptools wheel"
+    $installLegacyDepsCommand = "'$wslLegacyPython' -m pip install inaSpeechSegmenter"
+
+    Write-Info "Ensuring Python, venv support, and ffmpeg inside WSL..."
+    Invoke-WSLBash -Distro $wslDistro -AsRoot -IgnoreExitCode -Command $aptInstallCommand -WorkingDirectory $RepoRoot
+
+    Write-Info "Creating / refreshing WSL legacy detector virtual environment..."
+    Invoke-WSLBash -Distro $wslDistro -IgnoreExitCode -Command $createVenvCommand -WorkingDirectory $RepoRoot
+
+    Write-Info "Upgrading WSL legacy detector packaging tools..."
+    Invoke-WSLBash -Distro $wslDistro -IgnoreExitCode -Command $upgradeLegacyPipCommand -WorkingDirectory $RepoRoot
+
+    Write-Info "Installing WSL legacy detector dependencies..."
+    Invoke-WSLBash -Distro $wslDistro -IgnoreExitCode -Command $installLegacyDepsCommand -WorkingDirectory $RepoRoot
+
+    if (Test-Path $legacyDetectorScript) {
+        $wslSource = Convert-WindowsPathToWSL -Path $legacyDetectorScript
+        $copyDetectorCommand = "mkdir -p '$wslLegacyDetectorRoot' && cp '$wslSource' '$wslLegacyDetectorScript' && sed -i 's/\r$//' '$wslLegacyDetectorScript'"
+        Write-Info "Copying legacy detector script into WSL runtime directory..."
+        Invoke-WSLBash -Distro $wslDistro -IgnoreExitCode -Command $copyDetectorCommand -WorkingDirectory $RepoRoot
+    }
+    else {
+        Write-WarnText "The WSL legacy detector script copy step was skipped because detect_segments_tf.py is missing on the Windows side."
+    }
+
+    if (Test-Path $legacyWrapperScript) {
+        $wslWrapperSource = Convert-WindowsPathToWSL -Path $legacyWrapperScript
+        $copyWrapperCommand = "mkdir -p '$wslLegacyDetectorRoot' && cp '$wslWrapperSource' '$wslLegacyWrapperScript' && sed -i 's/\r$//' '$wslLegacyWrapperScript' && chmod +x '$wslLegacyWrapperScript'"
+        Write-Info "Copying WSL legacy detector wrapper script into WSL runtime directory..."
+        Invoke-WSLBash -Distro $wslDistro -IgnoreExitCode -Command $copyWrapperCommand -WorkingDirectory $RepoRoot
+    }
+    else {
+        Write-WarnText "The WSL legacy detector wrapper copy step was skipped because detect_segments_wsl.sh is missing on the Windows side."
+    }
+
+    Write-Info "Validating the resulting WSL legacy detector runtime..."
+    $validationProbe = cmd /d /c "wsl -d Ubuntu -- bash -lc ""test -x '$wslLegacyPython' && test -f '$wslLegacyDetectorScript' && test -x '$wslLegacyWrapperScript' && printf ready"" 2>nul"
+    if ("$validationProbe" -notmatch "ready") {
+        throw "WSL legacy detector runtime validation failed. The WSL environment did not expose the expected python, detector script, and wrapper script after setup."
+    }
+
     $runtimePayload = @{
         repo_root = $RepoRoot
         main_python = ".venv/Scripts/python.exe"
         main_python_absolute = $mainPython
-        legacy_python = ".venv_legacy/Scripts/python.exe"
-        legacy_python_absolute = $legacyPython
-        legacy_detector_script = "runtime/detect_segments_tf.py"
-        legacy_detector_script_absolute = $legacyDetectorScript
-        detector_backend = "legacy-subprocess"
+        detector_backend = "legacy-wsl"
+        wsl_distro = $wslDistro
+        legacy_wsl_python = $wslLegacyPython
+        legacy_wsl_detector_script = $wslLegacyDetectorScript
+        legacy_wsl_wrapper_script = $wslLegacyWrapperScript
+        windows_fallback_legacy_python = ".venv_legacy/Scripts/python.exe"
+        windows_fallback_legacy_python_absolute = (Join-Path $RepoRoot ".venv_legacy\Scripts\python.exe")
+        windows_fallback_legacy_detector_script = "runtime/detect_segments_tf.py"
+        windows_fallback_legacy_detector_script_absolute = $legacyDetectorScript
+        windows_fallback_legacy_wrapper_script = "runtime/detect_segments_wsl.sh"
+        windows_fallback_legacy_wrapper_script_absolute = $legacyWrapperScript
         legacy_script_exists = (Test-Path $legacyDetectorScript)
-        legacy_python_exists = (Test-Path $legacyPython)
+        legacy_wrapper_script_exists = (Test-Path $legacyWrapperScript)
+        legacy_python_exists = $true
     } | ConvertTo-Json -Depth 4
 
     Set-Content -Path $runtimeConfig -Value $runtimePayload -Encoding UTF8
     Write-Success "Legacy detector runtime configuration written: $runtimeConfig"
     Write-Info "Main Python: $mainPython"
-    Write-Info "Legacy detector Python: $legacyPython"
-    Write-Info "Legacy detector script: $legacyDetectorScript"
+    Write-Info "WSL distro: $wslDistro"
+    Write-Info "WSL legacy detector Python: $wslLegacyPython"
+    Write-Info "WSL legacy detector script: $wslLegacyDetectorScript"
+    Write-Info "WSL legacy detector wrapper script: $wslLegacyWrapperScript"
+}
+
+function Ensure-LegacyDetectorEnvironment {
+    param(
+        [Parameter(Mandatory = $true)][string]$RepoRoot
+    )
+
+    Ensure-WSLLegacyDetectorEnvironment -RepoRoot $RepoRoot
 }
 
 function Sync-Project {
@@ -226,37 +391,40 @@ function Sync-Project {
     )
 
     Write-Step "Preparing virtual environment"
-    Invoke-Checked -FilePath "uv" -Arguments @("venv") -WorkingDirectory $RepoRoot
+    $mainEnvPython = Join-Path $RepoRoot ".venv\Scripts\python.exe"
+    if (Test-Path $mainEnvPython) {
+        Write-Info "Main project virtual environment already exists. Reusing .venv"
+    }
+    else {
+        Invoke-Checked -FilePath "uv" -Arguments @("venv") -WorkingDirectory $RepoRoot
+    }
 
-    Write-Step "Installing base dependencies"
-    Invoke-Checked -FilePath "uv" -Arguments @("sync") -WorkingDirectory $RepoRoot
+    $syncArguments = @("sync")
 
     if (-not $SkipDev) {
-        Write-Step "Installing development dependencies"
-        Invoke-Checked -FilePath "uv" -Arguments @("sync", "--group", "dev") -WorkingDirectory $RepoRoot
+        $syncArguments += @("--group", "dev")
     }
     else {
         Write-Info "Skipping dev dependencies."
     }
 
     if (-not $SkipAudio) {
-        Write-Step "Installing optional audio dependencies"
-        Invoke-Checked -FilePath "uv" -Arguments @("sync", "--extra", "audio") -WorkingDirectory $RepoRoot
+        $syncArguments += @("--extra", "audio")
     }
     else {
         Write-Info "Skipping audio dependencies."
     }
 
     if (-not $SkipGpu) {
-        Write-Step "Installing GPU runtime dependencies"
-        Invoke-Checked -FilePath "uv" -Arguments @("sync", "--extra", "gpu") -WorkingDirectory $RepoRoot
+        $syncArguments += @("--extra", "gpu")
     }
     else {
         Write-Info "Skipping GPU runtime dependencies."
     }
 
-    Write-Step "Installing Web UI dependencies"
-    Invoke-Checked -FilePath "uv" -Arguments @("sync", "--extra", "web") -WorkingDirectory $RepoRoot
+    Write-Step "Installing main environment dependencies"
+    $syncArguments += @("--extra", "web")
+    Invoke-Checked -FilePath "uv" -Arguments $syncArguments -WorkingDirectory $RepoRoot
 
     if (-not $SkipLegacy) {
         Ensure-LegacyDetectorEnvironment -RepoRoot $RepoRoot
@@ -287,8 +455,11 @@ function Show-NextSteps {
     Write-Host "  - Install ffmpeg if analyze/export commands complain about missing binaries."
     Write-Host "  - GPU runtime dependencies are installed by default for Windows NVIDIA systems."
     Write-Host "  - Web UI dependencies are also installed by default."
-    Write-Host "  - A legacy detector environment is also prepared by default in .venv_legacy."
-    Write-Host "  - Place detect_segments_tf.py in the runtime directory if you want the legacy detector backend to work."
+    Write-Host "  - The setup now prefers a WSL-oriented legacy detector backend."
+    Write-Host "  - If WSL or Ubuntu is missing, setup will try to install them automatically."
+    Write-Host "  - Some machines may still require administrator privileges, a reboot, or one manual first launch of Ubuntu."
+    Write-Host "  - If setup reports that Ubuntu is not initialized yet, run: wsl -d Ubuntu"
+    Write-Host "  - Complete the first-run Linux user setup, then rerun setup.ps1."
     Write-Host "  - Re-run this script with -SkipAudio, -SkipDev, -SkipGpu, or -SkipLegacy if you want a lighter install."
     Write-Host ""
 }

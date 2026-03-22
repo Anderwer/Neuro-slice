@@ -88,6 +88,24 @@ def _resolve_legacy_paths(config: AppConfig) -> tuple[Path, Path]:
     return legacy_python_path.resolve(), legacy_script_path.resolve()
 
 
+def _resolve_legacy_wsl_runtime(config: AppConfig) -> tuple[str, str, str]:
+    runtime_config = _load_runtime_config()
+
+    configured_distro = (config.detector.wsl_distro or "").strip()
+    configured_python = (config.detector.wsl_legacy_python_path or "").strip()
+    configured_script = (config.detector.wsl_legacy_script_path or "").strip()
+
+    runtime_distro = str(runtime_config.get("wsl_distro", "") or "").strip()
+    runtime_python = str(runtime_config.get("legacy_wsl_python", "") or "").strip()
+    runtime_script = str(runtime_config.get("legacy_wsl_detector_script", "") or "").strip()
+
+    distro = configured_distro or runtime_distro
+    python_path = configured_python or runtime_python
+    script_path = configured_script or runtime_script
+
+    return distro, python_path, script_path
+
+
 def _print_segments_summary(manifest: Mapping[str, object]) -> None:
     raw_segments = manifest.get("segments", [])
     segments: Sequence[object] = raw_segments if isinstance(raw_segments, Sequence) else []
@@ -332,17 +350,30 @@ def doctor(
         legacy_env_dir = Path.cwd() / legacy_env_dir
     legacy_env_dir = legacy_env_dir.resolve()
 
+    wsl_distro, wsl_python_path, wsl_script_path = _resolve_legacy_wsl_runtime(cfg)
+
     table = Table(title="Legacy Dual Environment Doctor")
     table.add_column("Check")
     table.add_column("Status")
     table.add_column("Details")
 
+    backend_ok = cfg.detector.backend in {"legacy-subprocess", "legacy-wsl"}
+    wsl_runtime_ok = bool(wsl_distro and wsl_python_path and wsl_script_path)
+
     checks = [
-        ("detector.backend", "OK" if cfg.detector.backend == "legacy-subprocess" else "WARN", cfg.detector.backend),
+        ("detector.backend", "OK" if backend_ok else "WARN", cfg.detector.backend),
         ("runtime/local_envs.json", "OK" if runtime_config_path.exists() else "MISSING", str(runtime_config_path)),
         (".venv_legacy", "OK" if legacy_env_dir.exists() else "MISSING", str(legacy_env_dir)),
         ("legacy python", "OK" if legacy_python_path.exists() else "MISSING", str(legacy_python_path)),
         ("legacy detector script", "OK" if legacy_script_path.exists() else "MISSING", str(legacy_script_path)),
+        ("wsl distro", "OK" if wsl_distro else "WARN", wsl_distro or "missing"),
+        ("wsl legacy python", "OK" if wsl_python_path else "WARN", wsl_python_path or "missing"),
+        ("wsl legacy detector script", "OK" if wsl_script_path else "WARN", wsl_script_path or "missing"),
+        (
+            "wsl runtime payload",
+            "OK" if wsl_runtime_ok else "WARN",
+            "loaded" if wsl_runtime_ok else "missing or incomplete",
+        ),
         (
             "runtime config payload",
             "OK" if runtime_config else "WARN",
@@ -371,6 +402,12 @@ def doctor(
             "legacy_python_exists": legacy_python_path.exists(),
             "legacy_script_path": str(legacy_script_path),
             "legacy_script_exists": legacy_script_path.exists(),
+            "wsl_distro": wsl_distro,
+            "wsl_distro_configured": bool(wsl_distro),
+            "legacy_wsl_python_path": wsl_python_path,
+            "legacy_wsl_python_configured": bool(wsl_python_path),
+            "legacy_wsl_detector_script_path": wsl_script_path,
+            "legacy_wsl_detector_script_configured": bool(wsl_script_path),
         }
     )
 

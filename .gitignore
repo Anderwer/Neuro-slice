@@ -45,6 +45,9 @@ Thumbs.db
 !.env.example
 my_config.toml
 
+# Accidental local test directories
+~/
+
 # Outputs / generated media
 output/
 cut_songs_*/

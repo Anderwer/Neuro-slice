@@ -15,6 +15,56 @@
 
 ---
 
+## 快速开始（先看这里）
+
+如果你只是想尽快把项目跑起来，推荐直接按下面这几步走：
+
+### 1）一键安装（推荐）
+
+Windows 下直接运行：
+
+- `scripts\setup.bat`
+
+或者：
+
+- `powershell -ExecutionPolicy Bypass -File .\scripts\setup.ps1`
+
+这一步会尽量自动准备：
+
+- 主环境 `.venv`
+- 桌面 GUI 依赖
+- GPU 相关依赖
+- legacy detector 所需环境
+- `runtime/local_envs.json`
+
+### 2）检查双环境状态
+
+安装后先运行：
+
+- `uv run neuro-slice doctor`
+
+如果这里大部分检查项都是 `OK`，说明主环境和 legacy 检测环境已经基本接通。
+
+### 3）启动桌面 GUI
+
+运行：
+
+- `uv run neuro-slice webui`
+
+然后在桌面 GUI 中：
+
+- 选择视频文件
+- 选择导出目录
+- 直接点击“分析并导出”
+
+### 4）如果只是想先试命令行
+
+可以先运行：
+
+- `uv run neuro-slice analyze --config examples/sample_config.toml --output output`
+
+---
+
 ## 这个项目现在的定位
 
 这个项目最初来自 VTuber 歌回切片需求，但现在的目标已经扩大为：
@@ -297,25 +347,42 @@ Manifest 可以理解为：
 
 ## 当前导出策略
 
-### 默认导出模式：精确重编码
+### 默认导出模式：NVIDIA 精确加速导出
 
-为了避免常见的关键帧切点问题，当前默认视频导出使用：
+为了避免常见的关键帧切点问题，同时尽量提升导出速度，当前默认视频导出优先使用：
 
-- `video_codec = "libx264"`
+- `video_codec = "h264_nvenc"`
 - `audio_codec = "aac"`
+
+这意味着默认策略不是 `copy`，而是：
+
+- 仍然进行精确重编码
+- 但优先使用 NVIDIA 编码器加速
+- 避免 `copy` 模式常见的前几秒黑屏、不可播放或关键帧切点不准问题
 
 这样做的优点是：
 
 - 切点更准
-- 不容易出现前几秒黑屏
+- 相比 `copy` 更稳定
+- 相比 `libx264` 通常更快
 - 更适合真正发布用的切片
 
-缺点是：
+如果当前机器上无法使用 `h264_nvenc`，程序会自动回退到：
 
-- 比 `copy` 慢
-- CPU 占用更高
+- `video_codec = "libx264"`
+- `audio_codec = "aac"`
 
-但目前默认优先保证稳定性和可用性。
+也就是说，当前默认策略是：
+
+1. **优先尝试 NVIDIA 精确加速导出**
+2. **如果不可用，则自动回退到 CPU 精确重编码**
+
+这样可以同时兼顾：
+
+- 可播放性
+- 切点稳定性
+- 导出速度
+- 跨机器兼容性
 
 ---
 
