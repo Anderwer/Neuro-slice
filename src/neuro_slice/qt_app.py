@@ -43,6 +43,10 @@ from neuro_slice.export.cutter import export_from_manifest
 from neuro_slice.pipeline import run_pipeline
 
 
+_APP_REF: QApplication | None = None
+_WINDOW_REF: "MainWindow | None" = None
+
+
 def _project_root() -> Path:
     return Path(__file__).resolve().parents[2]
 
@@ -512,6 +516,8 @@ class TaskWorker(QObject):
 class MainWindow(QMainWindow):
     def __init__(self, initial_config: AppConfig | None = None) -> None:
         super().__init__()
+        self.setAttribute(Qt.WidgetAttribute.WA_QuitOnClose, False)
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)
         self.setWindowTitle("Neuro-slice 桌面版")
         self.resize(1480, 940)
 
@@ -1128,8 +1134,12 @@ class MainWindow(QMainWindow):
     def _on_worker_finished(self) -> None:
         self._set_busy(False)
         self.mode_chip.setText("模式：空闲")
+        thread = self._thread
+        worker = self._worker
         self._worker = None
         self._thread = None
+        _ = thread
+        _ = worker
 
     # ------------------------------------------------------------------
     # Close handling
@@ -1431,7 +1441,11 @@ def _apply_fluentish_style(app: QApplication) -> None:
 
 
 def launch_desktop_app(config: AppConfig | None = None) -> None:
+    global _APP_REF, _WINDOW_REF
+
     app = QApplication.instance() or QApplication(sys.argv)
+    _APP_REF = app
+    app.setQuitOnLastWindowClosed(False)
 
     with contextlib.suppress(Exception):
         app.setStyle("Fusion")
@@ -1444,6 +1458,8 @@ def launch_desktop_app(config: AppConfig | None = None) -> None:
     _apply_fluentish_style(app)
 
     window = MainWindow(initial_config=config)
+    _WINDOW_REF = window
+    window.destroyed.connect(lambda *_: globals().__setitem__("_WINDOW_REF", None))
     window.show()
     app.exec()
 

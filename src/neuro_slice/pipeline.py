@@ -1524,6 +1524,10 @@ class ProcessingPipeline:
             "cublas",
             "cannot be loaded",
             "failed to load library",
+            "out of memory",
+            "cuda failed",
+            "cuda error",
+            "allocation",
         )
         return any(marker in message for marker in retry_markers)
 
@@ -1586,7 +1590,7 @@ class ProcessingPipeline:
                 raise
 
             self._log(
-                "faster-whisper CUDA runtime is unavailable. "
+                "faster-whisper CUDA execution failed. "
                 f"Original error: {exc}. Falling back to CPU/int8 for transcription."
             )
             self._update_status("CUDA 不可用，正在回退到 CPU/int8 继续转录")
